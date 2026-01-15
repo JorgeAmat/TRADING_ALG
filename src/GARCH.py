@@ -231,6 +231,70 @@ class Garch11OOSBest:
 
         self.h_all = h
 
+    # =========================
+    # NUEVA FUNCIÓN (lo que pides)
+    # =========================
+    def predecir_vol_futura_en_t(self, t: int, devolver_path: bool = True):
+        """
+        Devuelve la volatilidad futura predicha desde el instante 't' para el horizonte del modelo (self.N velas),
+        pensado para alimentar tu clasificación lateral/no-lateral a ~2h.
+
+        - sigma_2h: escalar (vol 2h predicha), consistente con predecir_test()
+        - sigma_path: vector de longitud N con sigma por vela futura (t+1..t+N) (opcional)
+
+        Requisitos previos:
+          cargar() -> crear_target() -> split() -> ajustar_estacionalidad_train()
+          fit_train_fit() -> filtrar_h_all()
+        """
+        if self.params is None or self.h_all is None or self.r_scaled_all is None:
+            raise RuntimeError(
+                "Faltan estados internos. Llama antes a: ajustar_estacionalidad_train(), fit_train_fit(), filtrar_h_all()."
+            )
+        if self.usar_estacionalidad and self.season_arr is None:
+            raise RuntimeError("usar_estacionalidad=True pero season_arr es None. Llama a ajustar_estacionalidad_train().")
+
+        n = len(self.df)
+        if t < 0 or t >= n:
+            raise IndexError(f"t fuera de rango: {t} (n={n})")
+        if (t + 1 + self.N) > n:
+            return None  # no hay suficientes velas futuras
+
+        omega, alpha, beta, mu = self.params
+        ab = alpha + beta
+
+        # h_{t+1} usando información hasta t (causal)
+        eps_t = self.r_scaled_all[t] - mu
+        h1 = omega + alpha * (eps_t ** 2) + beta * self.h_all[t]
+
+        # path h_{t+1}..h_{t+N}
+        hf = np.empty(self.N, dtype=float)
+        hf[0] = h1
+        for k in range(1, self.N):
+            hf[k] = omega + ab * hf[k - 1]
+
+        # sigma del modelo (sin estacionalidad) por paso
+        sigma_model_path = np.sqrt(hf) / self.escala_returns
+
+        # Escalar sigma_2h consistente con tu predecir_test(): sqrt(mean(hf))/scale * mean(season_next)
+        vol_model_2h = np.sqrt(np.mean(hf)) / self.escala_returns
+
+        if self.usar_estacionalidad:
+            s_next = self.season_arr[t + 1: t + 1 + self.N]
+            sigma_path = sigma_model_path * s_next
+            sigma_2h = vol_model_2h * float(np.mean(s_next))
+        else:
+            sigma_path = sigma_model_path
+            sigma_2h = vol_model_2h
+
+        out = {
+            "t": int(t),
+            "datetime": self.df["datetime"].iloc[t],
+            "sigma_2h": float(sigma_2h),
+        }
+        if devolver_path:
+            out["sigma_path"] = sigma_path  # np.ndarray (N,)
+        return out
+
     def predecir_test(self):
         _, test = self.split()
         omega, alpha, beta, mu = self.params
@@ -326,6 +390,14 @@ def main():
 
     # filtrar h
     m.filtrar_h_all()
+
+    # (DEMO) ejemplo: forecast desde un instante t
+    fc = m.predecir_vol_futura_en_t(t=10_000, devolver_path=True)
+    if fc is not None:
+        print("\n=== DEMO forecast en t=10000 ===")
+        print("datetime:", fc["datetime"])
+        print("sigma_2h:", fc["sigma_2h"])
+        print("sigma_path (primeros 5):", np.round(fc["sigma_path"][:5], 8))
 
     # pred test
     out = m.predecir_test()
