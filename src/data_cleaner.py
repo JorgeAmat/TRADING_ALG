@@ -69,7 +69,7 @@ class DataCleaner:
         
 
         if isinstance(data.columns, pd.MultiIndex):
-            data.columns = data.columns.get_level_values(0)
+            data.columns = ['_'.join(col).lower() for col in data.columns]
         data.columns.name = None
 
         #peequeño test
@@ -110,9 +110,11 @@ class DataCleaner:
             timeframe = TimeFrame(amount=minutes, unit=TimeFrameUnit.Minute)
         else:
             raise ValueError(f"Intervalo no soportado para Alpaca: {interval_str}")
+        
+        symbols = self.cfg.symbol if isinstance(self.cfg.symbol, list) else [self.cfg.symbol]
 
         request = StockBarsRequest(
-            symbol_or_symbols=self.cfg.symbol,
+            symbol_or_symbols=symbols,
             timeframe=timeframe,
             start=datetime.fromisoformat(self.cfg.start_date),
             end=datetime.fromisoformat(self.cfg.end_date)
@@ -126,6 +128,17 @@ class DataCleaner:
         df["datetime"] = pd.to_datetime(df["datetime"], utc=True)
         df.columns = [c.lower() for c in df.columns]
         df = df.sort_values("datetime").reset_index(drop=True)
+        
+        if "symbol" in df.columns:
+            keep = [c for c in ["datetime","symbol","open","high","low","close","volume","vwap","trade_count"] if c in df.columns]
+            df = df[keep]
+
+            value_cols = [c for c in df.columns if c not in ["datetime","symbol"]]
+            df = df.pivot(index="datetime", columns="symbol", values=value_cols)
+
+            df.columns = [f"{a}_{b}".lower() for a, b in df.columns]
+            df = df.reset_index()
+
 
         return df
 
@@ -154,9 +167,9 @@ class DataCleaner:
             raise ValueError("Fuente de datos no válida. Usa 'csv', 'alpaca o 'yfinance'.")
 
         return self.df
+    
 
-
-def preprocess_data(df):
+def preprocess_data(df, target_symbol):
     """
     Preprocesado causal (sin mirar futuro).
     - Ordena por datetime
@@ -164,14 +177,37 @@ def preprocess_data(df):
     - Crea features de retornos + volatilidad + momentum básico
     """
 
-    import numpy as np
-    import pandas as pd
-
     df = df.copy()
 
     # 1) datetime + orden
     df["datetime"] = pd.to_datetime(df["datetime"], utc=True, errors="coerce")
     df = df.dropna(subset=["datetime"]).sort_values("datetime").reset_index(drop=True)
+    
+        # --- BLOQUE NUEVO (mínimo) ---
+    # Normaliza target_symbol a como viene en columnas (en tu caso: qqq, tlt, etc.)
+    ts = str(target_symbol).lower()
+
+    # Si el df viene en formato ancho (close_qqq, open_qqq...), copiamos esas columnas a nombres genéricos
+    mapping = {
+        "open": f"open_{ts}",
+        "high": f"high_{ts}",
+        "low":  f"low_{ts}",
+        "close": f"close_{ts}",
+        "volume": f"volume_{ts}",
+        "vwap": f"vwap_{ts}",
+        "trade_count": f"trade_count_{ts}",
+    }
+
+    # Asegura que existe el close del activo objetivo
+    if mapping["close"] in df.columns:
+        for base, col in mapping.items():
+            if col in df.columns:
+                df[base] = df[col]
+    # Si ya viene en formato "simple" (close), no hacemos nada
+    elif "close" not in df.columns:
+        raise ValueError(f"Falta columna `close` o `{mapping['close']}` para target_symbol={ts}")
+    # --- FIN BLOQUE NUEVO ---
+
 
     eps = 1e-12
     W = 20  # ventana estándar para rolling
@@ -277,7 +313,8 @@ if __name__ == "__main__":
 
 
     # TEST CARGAR_DATOS
-    cfg = DataCleanerConfig(source="yfinance",symbol="BTC-USD",interval="1h",start_date="2025-10-20", end_date= "2025-10-21")
+    # TLT --> ETF Bono americano, IEGA.L --> BNDX Bono internacional menos USA, VXX --> nivel de miedo de los inversores
+    cfg = DataCleanerConfig(source="alpaca",symbol=["TLT", "VXX", "BNDX"],interval="15m",start_date="2025-10-20", end_date= "2025-10-21")
     #   TEST CARGAR_DATOS
     symbol_data = DataCleaner(cfg)
     datos = symbol_data.cargar_datos()
