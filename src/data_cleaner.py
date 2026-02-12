@@ -292,6 +292,12 @@ def preprocess_data(df, target_symbol):
 
     # 12) limpiar NaNs iniciales por rolling/shift
     df = df.dropna().reset_index(drop=True)
+    
+    # 13) EMAs Clasicas
+    for span in [9, 21, 50, 100, 200]:
+        df[f"ema_{span}"] = df["close"].ewm(span=span, adjust=False).mean()
+
+    
     return df
 
 
