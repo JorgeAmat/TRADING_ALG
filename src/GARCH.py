@@ -111,7 +111,7 @@ class Garch11OOSBest:
             start_date=self.start_date, end_date=self.end_date
         )
         df_raw = DataCleaner(cfg).cargar_datos()
-        df = preprocess_data(df_raw)
+        df = preprocess_data(df_raw, "qqq")
 
         if self.usar_horario_regular:
             if df["datetime"].dt.tz is None:
