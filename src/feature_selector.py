@@ -79,8 +79,8 @@ class SequentialFeatureSelectorWrapper:
             model = clone(self.model)
             model.fit(X_train, y_train)
 
-            y_pred = model.predict_proba(X_test)
-            score = roc_auc_score(y_test, y_pred, multi_class="ovr", average="macro")
+            y_pred = model.predict_proba(X_test)[:, 1]
+            score = roc_auc_score(y_test, y_pred)
 
             scores.append(score)
 
